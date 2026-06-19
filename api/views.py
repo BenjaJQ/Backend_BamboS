@@ -414,21 +414,15 @@ class RegistroUsuarioView(APIView):
             
             # 3. Intentar enviar el correo de bienvenida usando Resend
             try:
+                # Simplificamos la estructura y el vocabulario para pasar el filtro estricto de Gmail
                 html_content = f"""
-                <div style="font-family: 'Arial', sans-serif; background-color: #000000; color: #ffffff; padding: 40px; text-align: center; border-radius: 15px; border: 1px solid #222; max-width: 500px; margin: 0 auto;">
-                    <h2 style="color: #FFD700; letter-spacing: 2px; margin-bottom: 25px; text-transform: uppercase;">
-                        ¡Bienvenido a Bambo Eventos! 🎧
-                    </h2>
-                    <p style="font-size: 16px; color: #e0e0e0; margin-bottom: 15px;">
-                        ¡Hola, <strong>{nombre_usuario}</strong>!
-                    </p>
-                    <p style="font-size: 14px; color: #aaaaaa; line-height: 1.6; margin-bottom: 30px;">
-                        Gracias por registrarte en nuestra plataforma. Tu cuenta ha sido creada con éxito bajo el rol de <strong>Cliente</strong>.<br><br>
-                        Pronto podrás empezar a gestionar tus eventos, conocer la disponibilidad de nuestros DJs y asegurar las mejores mezclas para tus fechas especiales.
-                    </p>
-                    <div style="border-top: 1px solid #333; padding-top: 20px; font-size: 12px; color: #555555;">
-                        Este es un mensaje automático del sistema de Bambo Eventos. Por favor, no respondas a este correo.
-                    </div>
+                <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; border: 1px solid #eeeeee;">
+                    <h2>¡Hola, {nombre_usuario}!</h2>
+                    <p>Gracias por registrarte en nuestra plataforma de Bambu Eventos.</p>
+                    <p>Tu cuenta ha sido creada con éxito. Pronto podrás gestionar tus eventos y revisar la disponibilidad de nuestros servicios.</p>
+                    <br>
+                    <p>Saludos cordiales,</p>
+                    <p><strong>El equipo de Bambu Eventos</strong></p>
                 </div>
                 """
 
@@ -438,7 +432,7 @@ class RegistroUsuarioView(APIView):
                 resend.Emails.send({
                     "from": remitente,
                     "to": [correo_destino],
-                    "subject": "¡Gracias por registrarte en Bambo Eventos! ⭐",
+                    "subject": "Confirmacion de registro en Bambu Eventos",  # Sin emojis ni exclamaciones para evitar bloqueos
                     "html": html_content
                 })
                 print(f"📩 [RESEND SUCCESS]: Correo enviado con éxito a {correo_destino}")

@@ -12,6 +12,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.hashers import check_password
+from rest_framework import status
 
 # Librerías para Excel
 from openpyxl import Workbook
@@ -401,7 +402,10 @@ class RegistroUsuarioView(APIView):
         serializer = RegistroSerializer(data=request.data)
         
         if serializer.is_valid():
-            # 1. Guarda el usuario en la base de datos (Nace como 'Inactivo' y Rol 'Cliente')
+            # Carga la API Key en secreto desde las variables de entorno de Render
+            resend.api_key = os.getenv("RESEND_API_KEY")
+            
+            # 1. Guarda el usuario en la base de datos
             usuario_sistema = serializer.save()
             
             # 2. Extraer datos limpios para el correo
@@ -428,8 +432,11 @@ class RegistroUsuarioView(APIView):
                 </div>
                 """
 
+                # Carga el remitente de forma segura desde las variables de Render
+                remitente = os.getenv("RESEND_FROM_EMAIL", "Bambú Eventos <hola@bamboeventosperu.dpdns.org>")
+
                 resend.Emails.send({
-                    "from": "Bambo Eventos <onboarding@resend.dev>",
+                    "from": remitente,
                     "to": [correo_destino],
                     "subject": "¡Gracias por registrarte en Bambo Eventos! ⭐",
                     "html": html_content
@@ -437,8 +444,6 @@ class RegistroUsuarioView(APIView):
                 print(f"📩 [RESEND SUCCESS]: Correo enviado con éxito a {correo_destino}")
                 
             except Exception as e:
-                # Importante: Si Resend falla por falta de API Key local u otro motivo,
-                # imprimimos el error en consola pero NO tumbamos la respuesta exitosa del usuario.
                 print(f"❌ [RESEND ERROR]: No se pudo despachar el correo. Motivo: {str(e)}")
 
             return Response({

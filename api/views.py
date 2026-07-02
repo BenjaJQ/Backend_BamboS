@@ -11,6 +11,7 @@ from rest_framework import status, serializers
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.throttling import AnonRateThrottle 
 from django.contrib.auth.hashers import check_password
 from rest_framework import status
 
@@ -31,13 +32,15 @@ from .models import Administrador, Dj, Cliente, Usuario, UsuarioSistema, Venta, 
 # ==========================================
 # os.environ.get buscará de forma invisible la variable 'GROQ_API_KEY' en tu entorno.
 # Así nunca dejas texto plano de tus llaves en este archivo.
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_API_KEY_ADMIN = os.environ.get("GROQ_API_KEY", "")
+GROQ_API_KEY_CLIENTE = os.environ.get("GROQ_API_KEY_CLIENTE", "")
 
 resend.api_key = os.environ.get("RESEND_API_KEY")
 
 # Inicializamos el cliente de Groq (Maneja un fallback por si no se encuentra la variable)
-client_groq = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+client_groq = Groq(api_key=GROQ_API_KEY_ADMIN) if GROQ_API_KEY_ADMIN else None
 
+client_groq_cliente = Groq(api_key=GROQ_API_KEY_CLIENTE) if GROQ_API_KEY_CLIENTE else None
 
 # ==========================================
 # 1. PERSONALIZACIÓN DEL LOGIN (JWT)
@@ -446,3 +449,103 @@ class RegistroUsuarioView(APIView):
         
         print(f"❌ Error en registro: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+
+# ==========================================
+# 9. ASISTENTE VIRTUAL PANDA IA (COTIZACIONES Y PAGOS DIRECTOS)
+# ==========================================
+class AIChatPublicoView(APIView):
+    authentication_classes = []
+    permission_classes = []
+    throttle_classes = [AnonRateThrottle]
+
+    def post(self, request):
+        api_key_cliente = os.environ.get("GROQ_API_KEY_CLIENTE", "")
+        
+        if not api_key_cliente:
+            return Response(
+                {"error": "La API Key de Groq para Clientes no está configurada en las variables de entorno (.env)."}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        mensaje_usuario = request.data.get('mensaje', '')
+        if not mensaje_usuario:
+            return Response({"error": "El mensaje no puede estar vacío"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 🧠 El cerebro optimizado y estricto del Panda DJ
+        contexto_asistente = """
+        Eres 'Panda DJ', el asistente virtual súper carismático e inteligente de 'Bambo Eventos'. Tu único trabajo es orientar a los clientes, cotizar servicios y darles el enlace de pago cuando se decidan por un paquete.
+
+        CUANDO TE PREGUNTEN POR TODOS LOS PRECIOS O PAQUETES EN GENERAL, MOSTRARLOS ASÍ:
+
+        🏡 PARA HOGAR (Hasta 5 horas):
+        • PAQUETE BÁSICO 😎 (DJ + Equipo de Sonido + Luces) — S/. 300
+        • PAQUETE VIP 🤩⭐ (DJ + Equipo de Sonido + Luces + Animación) — S/. 400
+        • PAQUETE PREMIUM 🥳✨ (DJ + Equipo de Sonido + Luces + Animación + Maestro de Ceremonia) — S/. 500
+
+        🏢 PARA LOCALES (Hasta 5 horas):
+        • PAQUETE BÁSICO 😎 (DJ + Equipo de Sonido + Luces) — S/. 550
+        • PAQUETE VIP 🤩⭐ (DJ + Equipo de Sonido + Luces + Animación) — S/. 650
+        • PAQUETE PREMIUM 🥳✨ (DJ + Equipo de Sonido + Luces + Animación + Maestro de Ceremonia) — S/. 750
+
+        REGLAS CRÍTICAS DE COMPORTAMIENTO:
+        1. Sé amigable, usa términos de música y pon emojis.
+        2. ACCIÓN DIRECTA: Si el cliente ya menciona el paquete y el lugar exacto (ej. "VIP de Hogar", "Básico de Local"), dale su URL de pago correspondiente al instante y dile textualmente: "Haz clic aquí para registrar tu dirección y continuar con tu pago."
+        3. REGLA DE FILTRO INCOMPLETO (MUY IMPORTANTE): Si el cliente dice solo el nombre de un paquete a secas sin especificar el lugar (por ejemplo: "vip", "quiero el básico", "premium"), debes responder diciéndole que necesitas saber si es para hogar o local, y mostrarle ÚNICAMENTE las dos opciones de ese paquete específico de la siguiente manera:
+
+           Si dice "VIP", respondes algo como:
+           "¡El paquete VIP es una excelente opción! 😎 Pero dime, ¿tu evento será en un hogar o en un local? Aquí tienes las dos opciones para el VIP:
+           🏡 VIP Hogar — S/. 400
+           🏢 VIP Local — S/. 650"
+
+        4. Obligatorio: Responde ÚNICAMENTE con un objeto JSON válido estructurado con las llaves "respuesta" y "url_pago". No agregues texto fuera del JSON ni uses bloques de código markdown ```json.
+        5. El campo "url_pago" será null por defecto a menos que el cliente ya haya elegido paquete y lugar con total precisión.
+        
+        Mapeo de URLs de redirección (Usa estrictamente estos enlaces en "url_pago" cuando decida comprar con precisión):
+        - Hogar Básico -> http://localhost:3000/pago/1/hogar
+        - Hogar VIP -> http://localhost:3000/pago/2/hogar
+        - Hogar Premium -> http://localhost:3000/pago/3/hogar
+        - Local Básico -> http://localhost:3000/pago/4/local
+        - Local VIP -> http://localhost:3000/pago/5/local
+        - Local Premium -> http://localhost:3000/pago/6/local
+        """
+
+        try:
+            client_groq_instancia = Groq(api_key=api_key_cliente)
+
+            completion = client_groq_instancia.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": contexto_asistente},
+                    {"role": "user", "content": mensaje_usuario}
+                ],
+                temperature=0.2  # Bajamos un poco la temperatura para que sea más estricto con el JSON
+            )
+
+            respuesta_cruda = completion.choices[0].message.content.strip()
+
+            # Sistema de limpieza anti-markdown redundante
+            if "```" in respuesta_cruda:
+                if "json" in respuesta_cruda:
+                    respuesta_cruda = respuesta_cruda.split("```json")[-1].split("```")[0].strip()
+                else:
+                    respuesta_cruda = respuesta_cruda.split("```")[1].split("```")[0].strip()
+
+            # 🔥 CONTROL DE ERRORES MEJORADO: Si por alguna razón Groq no devuelve JSON válido, lo empaquetamos a la fuerza
+            try:
+                datos_respuesta = json.loads(respuesta_cruda)
+            except json.JSONDecodeError:
+                print("⚠️ La IA no devolvió un JSON perfecto, aplicando empaquetado forzado.")
+                datos_respuesta = {
+                    "respuesta": respuesta_cruda,
+                    "url_pago": None
+                }
+
+            return Response(datos_respuesta, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            print("❌ Error real capturado en Panda IA Chat:", str(e))
+            return Response({
+                "respuesta": "¡Ups! Tuve un pequeño cruce de cables en mis consolas de DJ. ¿Podrías repetirme la pregunta, por favor?",
+                "url_pago": None
+            }, status=status.HTTP_200_OK)

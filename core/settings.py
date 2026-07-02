@@ -17,9 +17,13 @@ pymysql.install_as_MySQLdb()
 import os
 from pathlib import Path
 from datetime import timedelta
+from dotenv import load_dotenv  # Carga de variables de entorno
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# 1. Intentamos leer el archivo .env
+load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 
 # Quick-start development settings - unsuitable for production
@@ -44,9 +48,9 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
-    'rest_framework_simplejwt',# Agregado
-    'corsheaders',         # Agregado
-    'api',                 # Tu aplicación
+    'rest_framework_simplejwt', # Agregado
+    'corsheaders',              # Agregado
+    'api',                      # Tu aplicación
 ]
 
 MIDDLEWARE = [
@@ -115,7 +119,14 @@ AUTH_PASSWORD_VALIDATORS = [
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-    )
+    ),
+    # 🔥 AGREGA ESTAS LÍNEAS PARA EL CONTROL DE COOLDOWN
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '1/min',  # ⏱️ Máximo 1 petición por minuto para usuarios públicos
+    }
 }
 
 SIMPLE_JWT = {

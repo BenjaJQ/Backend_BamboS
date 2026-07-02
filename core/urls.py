@@ -23,10 +23,11 @@ from api.views import (
     CustomTokenObtainPairView, 
     RegistroUsuarioView, 
     ListaUsuariosView,
-    ListaVentasView,  # <- NUEVA
-    ListaPagosView,   # <- NUEVA
+    ListaVentasView,  
+    ListaPagosView,   
     IAVistaPreviaView,        
-    IADescargarExcelView
+    IADescargarExcelView,
+    AIChatPublicoView  # 👈 Asegúrate de agregar esta coma y la vista aquí
 )
 
 urlpatterns = [
@@ -50,4 +51,5 @@ urlpatterns = [
     path('api/pagos/', ListaPagosView.as_view(), name='lista_pagos'),
     path('api/reportes/ia-vista-previa/', IAVistaPreviaView.as_view(), name='ia_vista_previa'),
     path('api/reportes/ia-descargar-excel/', IADescargarExcelView.as_view(), name='ia_descargar_excel'),
+    path('api/chat-publico/', AIChatPublicoView.as_view(), name='chat_publico'),
 ]

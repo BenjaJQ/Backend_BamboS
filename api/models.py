@@ -4,7 +4,7 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 # ==========================================
-# 1. MANAGER PARA USUARIOSISTEMA
+# 1. MANAGER PARA USUARIOSISTEMA (CORREGIDO)
 # ==========================================
 class UsuarioSistemaManager(BaseUserManager):
     def get_by_natural_key(self, username):
@@ -14,16 +14,18 @@ class UsuarioSistemaManager(BaseUserManager):
         if not username:
             raise ValueError('El username es obligatorio')
         
-        # Creamos el objeto sin el password directo para que no choque
         user = self.model(ususis_username=username, **extra_fields)
         
-        # set_password encripta la clave y la guarda en el campo 'password' 
-        # (que está vinculado a la columna UsuSis_Password)
         if password:
             user.set_password(password)
         
         user.save(using=self._db)
         return user
+
+    # 🔑 ESTA FUNCIÓN ES OBLIGATORIA PARA QUE SIMPLEJWT Y DJANGO NO COLAPSEN
+    def create_superuser(self, username, password=None, **extra_fields):
+        extra_fields.setdefault('ususis_estado', 'Activo')
+        return self.create_user(username, password, **extra_fields)
 
 # ==========================================
 # 2. TABLAS BASE

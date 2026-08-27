@@ -141,15 +141,19 @@ class Paquete(models.Model):
 class Venta(models.Model):
     ven_id = models.AutoField(db_column='Ven_ID', primary_key=True)
     cli = models.ForeignKey(Cliente, models.DO_NOTHING, db_column='Cli_ID')
-    dj = models.ForeignKey(Dj, models.DO_NOTHING, db_column='DJ_ID')
-    adm = models.ForeignKey(Administrador, models.DO_NOTHING, db_column='Adm_ID')
-    loc = models.ForeignKey(Local, models.DO_NOTHING, db_column='Loc_ID')
+    dj = models.ForeignKey(Dj, models.DO_NOTHING, db_column='DJ_ID', null=True, blank=True)
+    adm = models.ForeignKey(Administrador, models.DO_NOTHING, db_column='Adm_ID', null=True, blank=True)
     paq = models.ForeignKey(Paquete, models.DO_NOTHING, db_column='Paq_ID')
     ven_fechaevento = models.DateField(db_column='Ven_FechaEvento')
     ven_duracionhoras = models.IntegerField(db_column='Ven_DuracionHoras')
     ven_montototal = models.DecimalField(db_column='Ven_MontoTotal', max_digits=10, decimal_places=2)
     ven_estado = models.CharField(db_column='Ven_Estado', max_length=10, blank=True, null=True)
     ven_fecharegistro = models.DateTimeField(db_column='Ven_FechaRegistro', blank=True, null=True)
+    ven_direccion = models.CharField(db_column='Ven_Direccion', max_length=150, blank=True, null=True)
+    ven_distrito = models.CharField(db_column='Ven_Distrito', max_length=100, blank=True, null=True)
+    ven_nombrelugar = models.CharField(db_column='Ven_NombreLugar', max_length=100, blank=True, null=True)
+    ven_referencia = models.CharField(db_column='Ven_Referencia', max_length=255, blank=True, null=True)
+
     class Meta:
         managed = True
         db_table = 'venta'

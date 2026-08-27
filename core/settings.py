@@ -125,7 +125,7 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.AnonRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '1/min',  # ⏱️ Máximo 1 petición por minuto para usuarios públicos
+        'anon': '1/min',  
     }
 }
 
@@ -134,6 +134,8 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
     'AUTH_HEADER_TYPES': ('Bearer',),
     'UPDATE_LAST_LOGIN': False,
+    'USER_ID_FIELD': 'ususis_id', 
+    'USER_ID_CLAIM': 'user_id',
 }
 
 AUTH_USER_MODEL = 'api.UsuarioSistema'

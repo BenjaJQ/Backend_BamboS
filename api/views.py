@@ -1,6 +1,7 @@
 import os  
 import json
 import resend
+import requests
 from django.shortcuts import render
 from django.db import connection
 from django.db.models import Q
@@ -14,6 +15,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.throttling import AnonRateThrottle 
 from django.contrib.auth.hashers import check_password
 from rest_framework import status
+from django.db import transaction
 
 # Librerías para Excel
 from openpyxl import Workbook
@@ -24,26 +26,110 @@ from openpyxl.utils import get_column_letter
 from groq import Groq 
 
 # Importación de tus modelos
-from .models import Administrador, Dj, Cliente, Usuario, UsuarioSistema, Venta, Pago
+from .models import Administrador, Dj, Cliente, Usuario, UsuarioSistema, Venta, Pago, Local, Paquete
 
 
 # ==========================================
 # CONFIGURACIÓN DE IA SEGURA (CONTRA FILTRACIONES EN GITHUB)
 # ==========================================
-# os.environ.get buscará de forma invisible la variable 'GROQ_API_KEY' en tu entorno.
-# Así nunca dejas texto plano de tus llaves en este archivo.
-GROQ_API_KEY_ADMIN = os.environ.get("GROQ_API_KEY", "")
-GROQ_API_KEY_CLIENTE = os.environ.get("GROQ_API_KEY_CLIENTE", "")
+# Ahora os.environ.get busca exactamente los nombres que pusiste en Render
+GROQ_API_KEY_ADMIN = os.environ.get("GROQ_API_KEY_ADMIN")
+GROQ_API_KEY_CLIENTE = os.environ.get("GROQ_API_KEY_CLIENTE")
 
 resend.api_key = os.environ.get("RESEND_API_KEY")
 
-# Inicializamos el cliente de Groq (Maneja un fallback por si no se encuentra la variable)
+# Inicializamos los clientes de Groq inyectando las llaves explícitamente
 client_groq = Groq(api_key=GROQ_API_KEY_ADMIN) if GROQ_API_KEY_ADMIN else None
-
 client_groq_cliente = Groq(api_key=GROQ_API_KEY_CLIENTE) if GROQ_API_KEY_CLIENTE else None
 
+def validar_turnstile(token):
+    # Secret Key de prueba oficial de Cloudflare Turnstile
+    SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")
+    url = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+    
+    payload = {
+        'secret': SECRET_KEY,
+        'response': token
+    }
+    
+    try:
+        response = requests.post(url, data=payload, timeout=5)
+        datos = response.json()
+        return datos.get('success', False)
+    except Exception as e:
+        print(f"❌ Error al consultar servidor de Turnstile: {str(e)}")
+        return False
+    
 # ==========================================
-# 1. PERSONALIZACIÓN DEL LOGIN (JWT)
+# VERIFICACION DE UBICACIONES 
+# ==========================================
+    
+class BuscarLocalView(APIView):
+    """Retorna sugerencias de locales registrados cuando el cliente escribe."""
+    def get(self, request):
+        query = request.GET.get('q', '').strip()
+        if len(query) >= 2:
+            locales = Local.objects.filter(loc_nombre__icontains=query).values(
+                'loc_id', 'loc_nombre', 'loc_direccion', 'loc_distrito'
+            )[:5]
+            return Response(list(locales), status=status.HTTP_200_OK)
+        return Response([], status=status.HTTP_200_OK)
+
+
+class RegistrarEventoView(APIView):
+    """Crea o reutiliza el Local y registra la Venta en BD."""
+    @transaction.atomic
+    def post(self, request):
+        data = request.data
+        tipo_evento = data.get('tipo_evento') # 'hogar' o 'local'
+        local_id = data.get('loc_id')
+
+        # 1. Obtener datos de ubicación
+        if tipo_evento == 'local' and local_id:
+            local_obj = Local.objects.get(pk=local_id)
+            nombre_lugar = local_obj.loc_nombre
+            direccion = local_obj.loc_direccion
+            distrito = local_obj.loc_distrito
+        else:
+            nombre_lugar = "Casa / Hogar" if tipo_evento == 'hogar' else data.get('loc_nombre')
+            direccion = data.get('loc_direccion')
+            distrito = data.get('loc_distrito')
+            
+            Local.objects.create(
+                loc_nombre=nombre_lugar,
+                loc_direccion=direccion,
+                loc_distrito=distrito
+            )
+
+        # 2. Obtener o crear el cliente en BD si aún no existe el perfil
+        usuario_obj = request.user.usu
+        cliente_obj = Cliente.objects.filter(usu=usuario_obj).first()
+        if not cliente_obj:
+            cliente_obj = Cliente.objects.create(usu=usuario_obj)
+
+        paquete_obj = Paquete.objects.get(pk=data.get('paq_id'))
+
+        # 3. Crear la Venta
+        nueva_venta = Venta.objects.create(
+            cli=cliente_obj,
+            paq=paquete_obj,
+            ven_fechaevento=data.get('ven_fechaevento'),
+            ven_duracionhoras=paquete_obj.paq_tiempohoras or 5,
+            ven_montototal=paquete_obj.paq_precio,
+            ven_nombrelugar=nombre_lugar,
+            ven_direccion=direccion,
+            ven_distrito=distrito,
+            ven_referencia=data.get('loc_referencia', ''),
+            ven_estado='Pendiente'
+        )
+
+        return Response({
+            "message": "Evento registrado correctamente",
+            "ven_id": nueva_venta.pk
+        }, status=status.HTTP_201_CREATED)
+
+# ==========================================
+# 1. PERSONALIZACIÓN DEL LOGIN (JWT + CAPTCHA)
 # ==========================================
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def __init__(self, *args, **kwargs):
@@ -54,6 +140,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
     def validate(self, attrs):
         data_json = self.context['request'].data
+        
+        # 🛡️ VALIDACIÓN DE CLOUDFLARE TURNSTILE
+        captcha_token = data_json.get('cf_turnstile_response')
+        if not captcha_token or not validar_turnstile(captcha_token):
+            print("❌ ERROR: Verificación de Captcha fallida.")
+            raise serializers.ValidationError("Error en la verificación de seguridad (Captcha). Intenta nuevamente.")
         
         login_input = (
             data_json.get("ususis_username") or 
@@ -141,6 +233,9 @@ class ListaUsuariosView(APIView):
 # ==========================================
 # 4. GESTIÓN DE VENTAS (CORREGIDO)
 # ==========================================
+# ==========================================
+# 4. GESTIÓN DE VENTAS 
+# ==========================================
 class ListaVentasView(APIView):
     def get(self, request):
         try:
@@ -158,6 +253,7 @@ class ListaVentasView(APIView):
                     'ven_fechaevento': str(v.ven_fechaevento) if v.ven_fechaevento else None,
                     'ven_duracionhoras': v.ven_duracionhoras,
                     'ven_montototal': float(v.ven_montototal) if v.ven_montototal else 0.0,
+                    'ven_referencia': v.ven_referencia,  # <-- CAMBIO AQUÍ
                     'ven_estado': v.ven_estado,
                 })
                 
@@ -183,6 +279,7 @@ class ListaVentasView(APIView):
                     'ven_fechaevento': str(dict_fila.get('ven_fechaevento')),
                     'ven_duracionhoras': dict_fila.get('ven_duracionhoras'),
                     'ven_montototal': float(dict_fila.get('ven_montototal') or 0),
+                    'ven_referencia': dict_fila.get('ven_referencia'),  # <-- CAMBIO AQUÍ
                     'ven_estado': dict_fila.get('ven_estado'),
                 })
             return Response(lista_ventas, status=status.HTTP_200_OK)
@@ -405,37 +502,31 @@ class RegistroUsuarioView(APIView):
         serializer = RegistroSerializer(data=request.data)
         
         if serializer.is_valid():
-            # Carga la API Key en secreto desde las variables de entorno de Render
-            resend.api_key = os.getenv("RESEND_API_KEY")
+            # CORRECCIÓN AQUÍ: Pasar el nombre exacto de la variable
+            resend.api_key = os.environ.get("RESEND_API_KEY")
             
-            # 1. Guarda el usuario en la base de datos
             usuario_sistema = serializer.save()
-            
-            # 2. Extraer datos limpios para el correo
             correo_destino = request.data.get('email')
             nombre_usuario = request.data.get('nombre', 'Usuario')
             
-            # 3. Intentar enviar el correo de bienvenida usando Resend
             try:
-                # Simplificamos la estructura y el vocabulario para pasar el filtro estricto de Gmail
                 html_content = f"""
-                <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; border: 1px solid #eeeeee;">
-                    <h2>¡Hola, {nombre_usuario}!</h2>
-                    <p>Gracias por registrarte en nuestra plataforma de Bambu Eventos.</p>
-                    <p>Tu cuenta ha sido creada con éxito. Pronto podrás gestionar tus eventos y revisar la disponibilidad de nuestros servicios.</p>
+                <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; border: 1px solid #eeeeee; border-radius: 8px;">
+                    <h2 style="color: #222222;">¡Hola, {nombre_usuario}!</h2>
+                    <p>Gracias por registrarte en la plataforma de <strong>Bambo Eventos</strong>.</p>
+                    <p>Tu cuenta ha sido creada con éxito. Ya puedes explorar nuestros paquetes, cotizar tu evento y gestionar tus reservas.</p>
                     <br>
                     <p>Saludos cordiales,</p>
-                    <p><strong>El equipo de Bambu Eventos</strong></p>
+                    <p><strong>El equipo de Bambo Eventos</strong></p>
                 </div>
                 """
 
-                # Carga el remitente de forma segura desde las variables de Render
-                remitente = os.getenv("RESEND_FROM_EMAIL", "Bambú Eventos <hola@bamboeventosperu.dpdns.org>")
+                remitente = os.getenv("RESEND_FROM_EMAIL", "Bambo Eventos <contacto@bamboeventos.com>")
 
                 resend.Emails.send({
                     "from": remitente,
                     "to": [correo_destino],
-                    "subject": "Confirmacion de registro en Bambu Eventos",  # Sin emojis ni exclamaciones para evitar bloqueos
+                    "subject": "Confirmacion de registro en Bambo Eventos",
                     "html": html_content
                 })
                 print(f"📩 [RESEND SUCCESS]: Correo enviado con éxito a {correo_destino}")
@@ -502,12 +593,12 @@ class AIChatPublicoView(APIView):
         5. El campo "url_pago" será null por defecto a menos que el cliente ya haya elegido paquete y lugar con total precisión.
         
         Mapeo de URLs de redirección (Usa estrictamente estos enlaces en "url_pago" cuando decida comprar con precisión):
-        - Hogar Básico -> http://localhost:3000/pago/1/hogar
-        - Hogar VIP -> http://localhost:3000/pago/2/hogar
-        - Hogar Premium -> http://localhost:3000/pago/3/hogar
-        - Local Básico -> http://localhost:3000/pago/4/local
-        - Local VIP -> http://localhost:3000/pago/5/local
-        - Local Premium -> http://localhost:3000/pago/6/local
+        -Hogar Básico -> https://www.bamboeventos.com/pago/1/hogar
+        - Hogar VIP -> https://www.bamboeventos.com/pago/2/hogar
+        - Hogar Premium -> https://www.bamboeventos.com/pago/3/hogar
+        - Local Básico -> https://www.bamboeventos.com/pago/4/local
+        - Local VIP -> https://www.bamboeventos.com/pago/5/local
+        - Local Premium -> https://www.bamboeventos.com/pago/6/local
         """
 
         try:
@@ -549,3 +640,69 @@ class AIChatPublicoView(APIView):
                 "respuesta": "¡Ups! Tuve un pequeño cruce de cables en mis consolas de DJ. ¿Podrías repetirme la pregunta, por favor?",
                 "url_pago": None
             }, status=status.HTTP_200_OK)
+            
+# ==========================================
+# 10. AUTENTICACIÓN CON GOOGLE OAUTH
+# ==========================================
+class GoogleLoginView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        token = request.data.get('token')
+        if not token:
+            return Response({"error": "Token de Google no proporcionado"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validar el token directamente con los servidores de Google
+        google_url = f"https://oauth2.googleapis.com/tokeninfo?id_token={token}"
+        res = requests.get(google_url)
+
+        if res.status_code != 200:
+            return Response({"error": "Token de Google inválido"}, status=status.HTTP_400_BAD_REQUEST)
+
+        user_data = res.json()
+        email = user_data.get('email')
+        first_name = user_data.get('given_name', '')
+        last_name = user_data.get('family_name', '')
+
+        if not email:
+            return Response({"error": "No se pudo obtener el correo de Google"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Buscar o crear el usuario en la base de datos
+        with transaction.atomic():
+            usu = Usuario.objects.filter(usu_email=email).first()
+            if not usu:
+                usu = Usuario.objects.create(
+                    usu_nombres=first_name,
+                    usu_apellidos=last_name,
+                    usu_email=email,
+                    usu_rol='cliente'
+                )
+
+            user_obj = UsuarioSistema.objects.filter(usu=usu).first()
+            if not user_obj:
+                base_username = email.split('@')[0]
+                username = base_username
+                counter = 1
+                while UsuarioSistema.objects.filter(ususis_username=username).exists():
+                    username = f"{base_username}{counter}"
+                    counter += 1
+
+                user_obj = UsuarioSistema.objects.create(
+                    ususis_username=username,
+                    usu=usu,
+                )
+                user_obj.set_unusable_password()
+                user_obj.save()
+
+        # Generar tokens JWT del sistema
+        refresh = RefreshToken.for_user(user_obj)
+        user_role = user_obj.usu.usu_rol.lower() if user_obj.usu.usu_rol else 'cliente'
+
+        return Response({
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+            'username': user_obj.ususis_username,
+            'role': user_role,
+            'user_id': user_obj.usu.usu_id
+        }, status=status.HTTP_200_OK)

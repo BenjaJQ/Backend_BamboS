@@ -27,7 +27,10 @@ from api.views import (
     ListaPagosView,   
     IAVistaPreviaView,        
     IADescargarExcelView,
-    AIChatPublicoView  # 👈 Asegúrate de agregar esta coma y la vista aquí
+    AIChatPublicoView,
+    GoogleLoginView,
+    BuscarLocalView,
+    RegistrarEventoView
 )
 
 urlpatterns = [
@@ -52,4 +55,7 @@ urlpatterns = [
     path('api/reportes/ia-vista-previa/', IAVistaPreviaView.as_view(), name='ia_vista_previa'),
     path('api/reportes/ia-descargar-excel/', IADescargarExcelView.as_view(), name='ia_descargar_excel'),
     path('api/chat-publico/', AIChatPublicoView.as_view(), name='chat_publico'),
+    path('api/auth/google/', GoogleLoginView.as_view(), name='google_login'),
+    path('api/locales/buscar/', BuscarLocalView.as_view(), name='buscar_locales'),
+    path('api/eventos/registrar/', RegistrarEventoView.as_view(), name='registrar_evento'),
 ]

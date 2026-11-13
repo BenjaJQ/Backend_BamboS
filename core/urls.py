@@ -31,7 +31,8 @@ from api.views import (
     GoogleLoginView,
     BuscarLocalView,
     PerfilUsuarioView,
-    RegistrarEventoView
+    RegistrarEventoView,
+    ListaDJsView
 )
 
 urlpatterns = [
@@ -60,4 +61,7 @@ urlpatterns = [
     path('api/locales/buscar/', BuscarLocalView.as_view(), name='buscar_locales'),
     path('api/eventos/registrar/', RegistrarEventoView.as_view(), name='registrar_evento'),
     path('api/perfil/', PerfilUsuarioView.as_view(), name='perfil_usuario'),
+    path('api/usuarios/', ListaUsuariosView.as_view(), name='lista_usuarios'),
+    path('api/usuarios/<int:pk>/', ListaUsuariosView.as_view(), name='detalle_usuario'),
+    path('api/djs/', ListaDJsView.as_view(), name='lista_djs'),
 ]

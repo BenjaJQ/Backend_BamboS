@@ -13,7 +13,7 @@ from datetime import datetime
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.throttling import AnonRateThrottle 
 from django.contrib.auth.hashers import check_password
 from rest_framework import status
@@ -213,28 +213,186 @@ class RegistroUsuarioView(APIView):
 # 3. GESTIÓN DE USUARIOS PARA EL PANEL
 # ==========================================
 class ListaUsuariosView(APIView):
-    def get(self, request):
-        usuarios = Usuario.objects.all().values(
-            'usu_id', 'usu_nombres', 'usu_apellidos', 'usu_email', 'usu_rol', 'usu_telefono'
-        )
-        return Response(list(usuarios), status=status.HTTP_200_OK)
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [IsAuthenticated()]
+        return [IsAuthenticated()]
 
-    def patch(self, request, pk):
-        try:
-            usuario = Usuario.objects.get(pk=pk)
-            nuevo_rol = request.data.get('usu_rol')
+    def _es_admin(self, user):
+        if not user or not user.is_authenticated:
+            return False
+        usuario = getattr(user, 'usu', None)
+        rol = (usuario.usu_rol if usuario else '').strip().lower()
+        return rol in ['admin', 'administrador', 'super admin']
+
+    def _serializar_usuario(self, u):
+        cuenta = UsuarioSistema.objects.filter(usu=u).first()
+        dj_perfil = Dj.objects.filter(usu=u).first()
+        estado = cuenta.ususis_estado if cuenta else 'Activo'
+
+        return {
+            'usu_id': u.usu_id,
+            'usu_nombres': u.usu_nombres or '',
+            'usu_apellidos': u.usu_apellidos or '',
+            'usu_tipodocumento': u.usu_tipodocumento or 'DNI',
+            'usu_numdocumento': u.usu_numdocumento or '',
+            'usu_email': u.usu_email or (cuenta.ususis_username if cuenta else ''),
+            'usu_telefono': u.usu_telefono or '',
+            'usu_fechanacimiento': u.usu_fechanacimiento.strftime('%Y-%m-%d') if u.usu_fechanacimiento else '',
+            'usu_rol': u.usu_rol or 'Cliente',
+            'usu_fecharegistro': u.usu_fecharegistro.strftime('%d/%m/%Y') if u.usu_fecharegistro else '',
+            'estado': estado,  # 'Activo' o 'Inactivo'
+            'dj_activo': bool(dj_perfil.dj_activo) if dj_perfil else (estado == 'Activo'),
+        }
+
+    def get(self, request, pk=None):
+        if pk is not None:
+            usuario = Usuario.objects.filter(usu_id=pk).first()
+            if not usuario:
+                return Response({'detail': 'Usuario no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response(self._serializar_usuario(usuario), status=status.HTTP_200_OK)
+
+        usuarios = Usuario.objects.all().order_by('-usu_id')
+        return Response([self._serializar_usuario(u) for u in usuarios], status=status.HTTP_200_OK)
+
+    def patch(self, request, pk=None):
+        if not self._es_admin(request.user):
+            return Response(
+                {'detail': 'Solo un administrador tiene permiso para modificar estos datos.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        usuario = Usuario.objects.filter(usu_id=pk).first()
+        if not usuario:
+            return Response({'detail': 'Usuario no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+
+        data = request.data
+
+        # 1. Nombres y Apellidos
+        if 'usu_nombres' in data:
+            nombres = str(data.get('usu_nombres') or '').strip()
+            if not nombres:
+                return Response({'detail': 'El nombre no puede estar vacío.'}, status=status.HTTP_400_BAD_REQUEST)
+            usuario.usu_nombres = nombres
+
+        if 'usu_apellidos' in data:
+            usuario.usu_apellidos = str(data.get('usu_apellidos') or '').strip()
+
+        # 2. Documento (DNI de 8 dígitos u otro documento)
+        if 'usu_tipodocumento' in data:
+            usuario.usu_tipodocumento = str(data.get('usu_tipodocumento') or 'DNI').strip()[:3]
+
+        if 'usu_numdocumento' in data:
+            doc = str(data.get('usu_numdocumento') or '').strip()
+            if doc:
+                if usuario.usu_tipodocumento == 'DNI' and (len(doc) != 8 or not doc.isdigit()):
+                    return Response(
+                        {'detail': 'El DNI debe contener exactamente 8 dígitos numéricos.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                if Usuario.objects.filter(usu_numdocumento=doc).exclude(usu_id=usuario.usu_id).exists():
+                    return Response(
+                        {'detail': 'Ese número de documento ya pertenece a otro usuario.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            usuario.usu_numdocumento = doc
+
+        # 3. Teléfono
+        if 'usu_telefono' in data:
+            telefono = str(data.get('usu_telefono') or '').strip()
+            if telefono and (not telefono.isdigit() or len(telefono) != 9):
+                return Response(
+                    {'detail': 'El teléfono debe tener 9 dígitos numéricos.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            usuario.usu_telefono = telefono or None
+
+        # 4. Fecha de nacimiento (solo editable por admin una vez que el cliente la registró)
+        if 'usu_fechanacimiento' in data:
+            fecha_str = str(data.get('usu_fechanacimiento') or '').strip()
+            if fecha_str:
+                try:
+                    usuario.usu_fechanacimiento = datetime.strptime(fecha_str, '%Y-%m-%d').date()
+                except ValueError:
+                    return Response(
+                        {'detail': 'Formato de fecha inválido (use AAAA-MM-DD).'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                usuario.usu_fechanacimiento = None
+
+        # 5. Correo electrónico
+        if 'usu_email' in data:
+            nuevo_email = str(data.get('usu_email') or '').strip()
+            if nuevo_email and nuevo_email != usuario.usu_email:
+                if Usuario.objects.filter(usu_email=nuevo_email).exclude(usu_id=usuario.usu_id).exists():
+                    return Response(
+                        {'detail': 'Este correo ya está registrado por otro usuario.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                cuenta = UsuarioSistema.objects.filter(usu=usuario).first()
+                if cuenta and cuenta.ususis_username == usuario.usu_email:
+                    if not UsuarioSistema.objects.filter(ususis_username=nuevo_email).exclude(ususis_id=cuenta.ususis_id).exists():
+                        cuenta.ususis_username = nuevo_email
+                        cuenta.save(update_fields=['ususis_username'])
+            usuario.usu_email = nuevo_email or None
+
+        # 6. Cambio de Rol y creación automática de su perfil asociado
+        if 'usu_rol' in data:
+            nuevo_rol = str(data.get('usu_rol') or '').strip()
             if nuevo_rol:
                 usuario.usu_rol = nuevo_rol
-                usuario.save()
-                return Response({"msg": f"Rol actualizado a {nuevo_rol}"}, status=status.HTTP_200_OK)
-            return Response({"error": "Falta el campo usu_rol"}, status=status.HTTP_400_BAD_REQUEST)
-        except Usuario.DoesNotExist:
-            return Response({"error": "Usuario no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+                if nuevo_rol == 'Cliente':
+                    Cliente.objects.get_or_create(usu=usuario)
+                elif nuevo_rol == 'DJ':
+                    Dj.objects.get_or_create(usu=usuario, defaults={'dj_activo': 1})
+                elif nuevo_rol in ['Admin', 'Asistente']:
+                    Administrador.objects.get_or_create(usu=usuario, defaults={'adm_rol': nuevo_rol})
+
+        usuario.save()
+
+        # 7. Habilitar / Deshabilitar cuenta (Admin, DJ, Asistente o Cliente)
+        if 'estado' in data:
+            nuevo_estado = str(data.get('estado') or '').strip()
+            if nuevo_estado in ['Activo', 'Inactivo']:
+                cuenta = UsuarioSistema.objects.filter(usu=usuario).first()
+                if cuenta:
+                    cuenta.ususis_estado = nuevo_estado
+                    cuenta.save(update_fields=['ususis_estado'])
+
+                # Si es DJ, sincronizamos su disponibilidad automáticamente
+                dj_perfil = Dj.objects.filter(usu=usuario).first()
+                if dj_perfil:
+                    dj_perfil.dj_activo = 1 if nuevo_estado == 'Activo' else 0
+                    dj_perfil.save(update_fields=['dj_activo'])
+
+        return Response(self._serializar_usuario(usuario), status=status.HTTP_200_OK)
 
 
-# ==========================================
-# 4. GESTIÓN DE VENTAS (CORREGIDO)
-# ==========================================
+class ListaDJsView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        djs = Dj.objects.select_related('usu').all().order_by('dj_id')
+        resultado = []
+
+        for dj in djs:
+            usuario = dj.usu
+            cuenta = UsuarioSistema.objects.filter(usu=usuario).first()
+            cuenta_activa = (cuenta.ususis_estado == 'Activo') if cuenta else True
+            disponible = bool(dj.dj_activo == 1 and cuenta_activa)
+
+            resultado.append({
+                'dj_id': dj.dj_id,
+                'usu_id': usuario.usu_id,
+                'nombre': f"{usuario.usu_nombres} {usuario.usu_apellidos}".strip(),
+                'especialidad': dj.dj_especialidad or 'DJ Eventos',
+                'disponible': disponible,
+                'estado': 'Disponible' if disponible else 'No disponible',
+            })
+
+        return Response(resultado, status=status.HTTP_200_OK)
+
 # ==========================================
 # 4. GESTIÓN DE VENTAS 
 # ==========================================

@@ -39,6 +39,7 @@ class Usuario(models.Model):
     # Cambio: Añadido unique=True para permitir login por correo
     usu_email = models.CharField(db_column='Usu_Email', max_length=100, blank=True, null=True, unique=True)
     usu_telefono = models.CharField(db_column='Usu_Telefono', max_length=20, blank=True, null=True)
+    usu_fechanacimiento = models.DateField(db_column='Usu_FechaNacimiento', blank=True, null=True)
     usu_rol = models.CharField(db_column='Usu_Rol', max_length=50, default='Cliente')
     usu_fecharegistro = models.DateTimeField(db_column='Usu_FechaRegistro', auto_now_add=True, null=True)
 

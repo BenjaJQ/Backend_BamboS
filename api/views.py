@@ -9,6 +9,7 @@ from django.http import HttpResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, serializers
+from datetime import datetime
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -716,6 +717,10 @@ class GoogleLoginView(APIView):
 class PerfilUsuarioView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def _dni_valido_registrado(self, dni):
+        dni_limpio = (dni or '').strip()
+        return len(dni_limpio) == 8 and dni_limpio.isdigit() and dni_limpio != '00000000'
+
     def get(self, request):
         usuario = getattr(request.user, 'usu', None)
         if not usuario:
@@ -724,9 +729,14 @@ class PerfilUsuarioView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+        dni_registrado = self._dni_valido_registrado(usuario.usu_numdocumento)
         fecha_registro = (
             usuario.usu_fecharegistro.strftime('%d/%m/%Y')
             if usuario.usu_fecharegistro else ''
+        )
+        fecha_nacimiento = (
+            usuario.usu_fechanacimiento.strftime('%Y-%m-%d')
+            if usuario.usu_fechanacimiento else ''
         )
 
         return Response({
@@ -734,8 +744,12 @@ class PerfilUsuarioView(APIView):
             'apellido': usuario.usu_apellidos or '',
             'email': usuario.usu_email or request.user.ususis_username or '',
             'telefono': usuario.usu_telefono or '',
-            'rol': usuario.usu_rol or 'Cliente',
+            'dni': usuario.usu_numdocumento.strip() if dni_registrado else '',
+            'dni_bloqueado': dni_registrado,
+            'fecha_nacimiento': fecha_nacimiento,
+            'fecha_nacimiento_bloqueada': bool(usuario.usu_fechanacimiento),
             'fecha_registro': fecha_registro,
+            'rol': usuario.usu_rol or 'Cliente',
         }, status=status.HTTP_200_OK)
 
     def patch(self, request):
@@ -746,40 +760,74 @@ class PerfilUsuarioView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        nombre = request.data.get('nombre', usuario.usu_nombres).strip()
-        apellido = request.data.get('apellido', usuario.usu_apellidos).strip()
-        nuevo_email = request.data.get('email', usuario.usu_email or '').strip()
-        telefono = request.data.get('telefono', usuario.usu_telefono or '').strip()
-
-        if not nombre:
-            return Response(
-                {'detail': 'El nombre es obligatorio.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Validar que el correo no esté ocupado por otro usuario (usu_email es unique=True)
-        if nuevo_email and nuevo_email != usuario.usu_email:
-            if Usuario.objects.filter(usu_email=nuevo_email).exclude(usu_id=usuario.usu_id).exists():
+        # 1. Teléfono (siempre editable por el cliente)
+        if 'telefono' in request.data:
+            telefono = str(request.data.get('telefono') or '').strip()
+            if telefono and (not telefono.isdigit() or len(telefono) != 9):
                 return Response(
-                    {'detail': 'Este correo electrónico ya está registrado por otra cuenta.'},
+                    {'detail': 'El número de teléfono debe tener 9 dígitos numéricos.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            usuario.usu_telefono = telefono or None
 
-            # Si el usuario iniciaba sesión usando su correo como username, lo mantenemos sincronizado
-            if request.user.ususis_username == usuario.usu_email:
-                if not UsuarioSistema.objects.filter(ususis_username=nuevo_email).exclude(ususis_id=request.user.ususis_id).exists():
-                    request.user.ususis_username = nuevo_email
-                    request.user.save(update_fields=['ususis_username'])
+        # 2. DNI (8 dígitos, solo editable una vez si aún no está registrado)
+        dni_ya_bloqueado = self._dni_valido_registrado(usuario.usu_numdocumento)
+        if 'dni' in request.data:
+            nuevo_dni = str(request.data.get('dni') or '').strip()
+            if dni_ya_bloqueado:
+                if nuevo_dni and nuevo_dni != usuario.usu_numdocumento.strip():
+                    return Response(
+                        {'detail': 'El DNI ya fue registrado y solo puede ser modificado por un administrador.'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            elif nuevo_dni:
+                if not (len(nuevo_dni) == 8 and nuevo_dni.isdigit()) or nuevo_dni == '00000000':
+                    return Response(
+                        {'detail': 'El DNI debe contener exactamente 8 dígitos numéricos.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                if Usuario.objects.filter(usu_numdocumento=nuevo_dni).exclude(usu_id=usuario.usu_id).exists():
+                    return Response(
+                        {'detail': 'Este número de DNI ya está asociado a otra cuenta.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                usuario.usu_tipodocumento = 'DNI'
+                usuario.usu_numdocumento = nuevo_dni
 
-        usuario.usu_nombres = nombre
-        usuario.usu_apellidos = apellido
-        usuario.usu_email = nuevo_email or None
-        usuario.usu_telefono = telefono or None
+        # 3. Fecha de Nacimiento (solo editable una vez si aún es NULL)
+        if 'fecha_nacimiento' in request.data:
+            nueva_fecha = str(request.data.get('fecha_nacimiento') or '').strip()
+            if usuario.usu_fechanacimiento:
+                if nueva_fecha and nueva_fecha != usuario.usu_fechanacimiento.strftime('%Y-%m-%d'):
+                    return Response(
+                        {'detail': 'La fecha de nacimiento ya fue registrada y solo puede ser modificada por un administrador.'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            elif nueva_fecha:
+                try:
+                    fecha_parseada = datetime.strptime(nueva_fecha, '%Y-%m-%d').date()
+                    if fecha_parseada >= datetime.now().date():
+                        return Response(
+                            {'detail': 'La fecha de nacimiento no puede ser actual o futura.'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    usuario.usu_fechanacimiento = fecha_parseada
+                except ValueError:
+                    return Response(
+                        {'detail': 'Formato de fecha de nacimiento inválido.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
         usuario.save()
 
+        dni_final_bloqueado = self._dni_valido_registrado(usuario.usu_numdocumento)
         return Response({
-            'nombre': usuario.usu_nombres,
-            'apellido': usuario.usu_apellidos,
+            'nombre': usuario.usu_nombres or '',
+            'apellido': usuario.usu_apellidos or '',
             'email': usuario.usu_email or '',
             'telefono': usuario.usu_telefono or '',
+            'dni': usuario.usu_numdocumento.strip() if dni_final_bloqueado else '',
+            'dni_bloqueado': dni_final_bloqueado,
+            'fecha_nacimiento': usuario.usu_fechanacimiento.strftime('%Y-%m-%d') if usuario.usu_fechanacimiento else '',
+            'fecha_nacimiento_bloqueada': bool(usuario.usu_fechanacimiento),
         }, status=status.HTTP_200_OK)

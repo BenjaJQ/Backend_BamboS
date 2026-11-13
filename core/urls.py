@@ -30,6 +30,7 @@ from api.views import (
     AIChatPublicoView,
     GoogleLoginView,
     BuscarLocalView,
+    PerfilUsuarioView,
     RegistrarEventoView
 )
 
@@ -58,4 +59,5 @@ urlpatterns = [
     path('api/auth/google/', GoogleLoginView.as_view(), name='google_login'),
     path('api/locales/buscar/', BuscarLocalView.as_view(), name='buscar_locales'),
     path('api/eventos/registrar/', RegistrarEventoView.as_view(), name='registrar_evento'),
+    path('api/perfil/', PerfilUsuarioView.as_view(), name='perfil_usuario'),
 ]

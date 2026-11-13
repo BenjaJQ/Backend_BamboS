@@ -12,6 +12,7 @@ from rest_framework import status, serializers
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.throttling import AnonRateThrottle 
 from django.contrib.auth.hashers import check_password
 from rest_framework import status
@@ -705,4 +706,80 @@ class GoogleLoginView(APIView):
             'username': user_obj.ususis_username,
             'role': user_role,
             'user_id': user_obj.usu.usu_id
+        }, status=status.HTTP_200_OK)
+        
+        
+# ==========================================
+# 11. Perfil
+# ==========================================
+        
+class PerfilUsuarioView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        usuario = getattr(request.user, 'usu', None)
+        if not usuario:
+            return Response(
+                {'detail': 'No se encontró un perfil asociado a esta cuenta.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        fecha_registro = (
+            usuario.usu_fecharegistro.strftime('%d/%m/%Y')
+            if usuario.usu_fecharegistro else ''
+        )
+
+        return Response({
+            'nombre': usuario.usu_nombres or '',
+            'apellido': usuario.usu_apellidos or '',
+            'email': usuario.usu_email or request.user.ususis_username or '',
+            'telefono': usuario.usu_telefono or '',
+            'rol': usuario.usu_rol or 'Cliente',
+            'fecha_registro': fecha_registro,
+        }, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        usuario = getattr(request.user, 'usu', None)
+        if not usuario:
+            return Response(
+                {'detail': 'No se encontró un perfil asociado a esta cuenta.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        nombre = request.data.get('nombre', usuario.usu_nombres).strip()
+        apellido = request.data.get('apellido', usuario.usu_apellidos).strip()
+        nuevo_email = request.data.get('email', usuario.usu_email or '').strip()
+        telefono = request.data.get('telefono', usuario.usu_telefono or '').strip()
+
+        if not nombre:
+            return Response(
+                {'detail': 'El nombre es obligatorio.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validar que el correo no esté ocupado por otro usuario (usu_email es unique=True)
+        if nuevo_email and nuevo_email != usuario.usu_email:
+            if Usuario.objects.filter(usu_email=nuevo_email).exclude(usu_id=usuario.usu_id).exists():
+                return Response(
+                    {'detail': 'Este correo electrónico ya está registrado por otra cuenta.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Si el usuario iniciaba sesión usando su correo como username, lo mantenemos sincronizado
+            if request.user.ususis_username == usuario.usu_email:
+                if not UsuarioSistema.objects.filter(ususis_username=nuevo_email).exclude(ususis_id=request.user.ususis_id).exists():
+                    request.user.ususis_username = nuevo_email
+                    request.user.save(update_fields=['ususis_username'])
+
+        usuario.usu_nombres = nombre
+        usuario.usu_apellidos = apellido
+        usuario.usu_email = nuevo_email or None
+        usuario.usu_telefono = telefono or None
+        usuario.save()
+
+        return Response({
+            'nombre': usuario.usu_nombres,
+            'apellido': usuario.usu_apellidos,
+            'email': usuario.usu_email or '',
+            'telefono': usuario.usu_telefono or '',
         }, status=status.HTTP_200_OK)
